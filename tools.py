@@ -1,4 +1,9 @@
+import logging
+
 from langchain_core.tools import tool
+
+
+logger = logging.getLogger(__name__)
 
 
 def _format_vnd(amount: int) -> str:
@@ -16,6 +21,10 @@ FLIGHTS_DB = {
         {"airline": "Vietnam Airlines", "departure": "07:00", "arrival": "09:15", "price": 2_100_000, "class": "economy"},
         {"airline": "VietJet Air", "departure": "10:00", "arrival": "12:15", "price": 1_350_000, "class": "economy"},
         {"airline": "VietJet Air", "departure": "16:00", "arrival": "18:15", "price": 1_100_000, "class": "economy"},
+    ],
+    ("Phú Quốc", "Hà Nội"): [
+        {"airline": "VietJet Air", "departure": "11:20", "arrival": "13:35", "price": 1_100_000, "class": "economy"},
+        {"airline": "Vietnam Airlines", "departure": "15:00", "arrival": "17:15", "price": 1_950_000, "class": "economy"},
     ],
     ("Hà Nội", "Hồ Chí Minh"): [
         {"airline": "Vietnam Airlines", "departure": "06:00", "arrival": "08:10", "price": 1_600_000, "class": "economy"},
@@ -69,41 +78,45 @@ def search_flights(origin: str, destination: str) -> str:
     Trả về danh sách chuyến bay với hãng, giờ bay, giá vé.
     Nếu không tìm thấy tuyến bay, trả về thông báo không có chuyến.
     """
-    route = (origin, destination)
-    flights = FLIGHTS_DB.get(route)
+    try:
+        route = (origin, destination)
+        flights = FLIGHTS_DB.get(route)
 
-    if flights is None:
-        reverse_route = (destination, origin)
-        reverse_flights = FLIGHTS_DB.get(reverse_route)
-        if reverse_flights is not None:
-            return (
-                f"Không tìm thấy chuyến bay từ {origin} đến {destination}. "
-                f"Hiện chỉ có dữ liệu chiều ngược lại từ {destination} đến {origin}."
-            )
-        return f"Không tìm thấy chuyến bay từ {origin} đến {destination}."
+        if flights is None:
+            reverse_route = (destination, origin)
+            reverse_flights = FLIGHTS_DB.get(reverse_route)
+            if reverse_flights is not None:
+                return (
+                    f"Không tìm thấy chuyến bay từ {origin} đến {destination}. "
+                    f"Hiện chỉ có dữ liệu chiều ngược lại từ {destination} đến {origin}."
+                )
+            return f"Không tìm thấy chuyến bay từ {origin} đến {destination}."
 
-    sorted_flights = sorted(flights, key=lambda flight: (flight["price"], flight["departure"]))
-    cheapest_flight = sorted_flights[0]
-    lines = [f"Các chuyến bay từ {origin} đến {destination}:"]
-    for index, flight in enumerate(sorted_flights, start=1):
-        lines.append(
-            f"{index}. {flight['airline']} | {flight['departure']} - {flight['arrival']} | "
-            f"{flight['class']} | {_format_vnd(flight['price'])}"
-        )
-    lines.extend(
-        [
-            "---",
-            (
-                "Gợi ý chuyến bay rẻ nhất để đưa vào calculate_budget: "
-                f"{cheapest_flight['airline']} {_format_vnd(cheapest_flight['price'])}"
-            ),
-            (
-                "Expense mẫu: "
-                f"ve_may_bay:{cheapest_flight['price']}"
-            ),
+        sorted_flights = sorted(flights, key=lambda flight: (flight["price"], flight["departure"]))
+        cheapest_flight = sorted_flights[0]
+        lines = [
+            f"Các chuyến bay từ {origin} đến {destination}:",
+            f"Tổng số chuyến tìm thấy: {len(sorted_flights)}",
         ]
-    )
-    return "\n".join(lines)
+        for index, flight in enumerate(sorted_flights, start=1):
+            lines.append(
+                f"{index}. {flight['airline']} | {flight['departure']} - {flight['arrival']} | "
+                f"{flight['class']} | {_format_vnd(flight['price'])}"
+            )
+        lines.extend(
+            [
+                "---",
+                (
+                    "Chuyến rẻ nhất để dùng tiếp cho calculate_budget: "
+                    f"{cheapest_flight['airline']} {_format_vnd(cheapest_flight['price'])}"
+                ),
+                f"Expense mẫu: ve_may_bay:{cheapest_flight['price']}",
+            ]
+        )
+        return "\n".join(lines)
+    except Exception as exc:
+        logger.exception("search_flights failed")
+        return f"Có lỗi khi tìm chuyến bay: {exc}"
 
 
 @tool
@@ -117,30 +130,35 @@ def search_hotels(city: str, max_price_per_night: int = 9_999_999) -> str:
 
     Trả về danh sách khách sạn phù hợp với tên, số sao, giá, khu vực, rating.
     """
-    hotels = HOTELS_DB.get(city)
-    if hotels is None:
-        return f"Không tìm thấy dữ liệu khách sạn tại {city}."
+    try:
+        hotels = HOTELS_DB.get(city)
+        if hotels is None:
+            return f"Không tìm thấy dữ liệu khách sạn tại {city}."
 
-    filtered_hotels = [
-        hotel for hotel in hotels if hotel["price_per_night"] <= max_price_per_night
-    ]
-    filtered_hotels.sort(key=lambda hotel: (-hotel["rating"], hotel["price_per_night"]))
+        filtered_hotels = [
+            hotel for hotel in hotels if hotel["price_per_night"] <= max_price_per_night
+        ]
+        filtered_hotels.sort(key=lambda hotel: (-hotel["rating"], hotel["price_per_night"]))
 
-    if not filtered_hotels:
-        return (
-            f"Không tìm thấy khách sạn tại {city} với giá dưới "
-            f"{_format_vnd(max_price_per_night)}/đêm. Hãy thử tăng ngân sách."
-        )
+        if not filtered_hotels:
+            return (
+                f"Không tìm thấy khách sạn tại {city} với giá dưới "
+                f"{_format_vnd(max_price_per_night)}/đêm. Hãy thử tăng ngân sách."
+            )
 
-    lines = [
-        f"Khách sạn tại {city} phù hợp ngân sách dưới {_format_vnd(max_price_per_night)}/đêm:"
-    ]
-    for index, hotel in enumerate(filtered_hotels, start=1):
-        lines.append(
-            f"{index}. {hotel['name']} | {hotel['stars']} sao | {hotel['area']} | "
-            f"rating {hotel['rating']} | {_format_vnd(hotel['price_per_night'])}/đêm"
-        )
-    return "\n".join(lines)
+        lines = [
+            f"Khách sạn tại {city} phù hợp ngân sách dưới {_format_vnd(max_price_per_night)}/đêm:",
+            f"Tổng số khách sạn phù hợp: {len(filtered_hotels)}",
+        ]
+        for index, hotel in enumerate(filtered_hotels, start=1):
+            lines.append(
+                f"{index}. {hotel['name']} | {hotel['stars']} sao | {hotel['area']} | "
+                f"rating {hotel['rating']} | {_format_vnd(hotel['price_per_night'])}/đêm"
+            )
+        return "\n".join(lines)
+    except Exception as exc:
+        logger.exception("search_hotels failed")
+        return f"Có lỗi khi tìm khách sạn: {exc}"
 
 
 @tool
@@ -156,61 +174,54 @@ def calculate_budget(total_budget: int, expenses: str) -> str:
     Trả về bảng chi tiết các khoản chi và số tiền còn lại.
     Nếu vượt ngân sách, cảnh báo rõ ràng số tiền thiếu.
     """
-    raw_items = [item.strip() for item in expenses.split(",") if item.strip()]
-    if not raw_items:
-        return "Chuỗi expenses đang trống. Hãy dùng định dạng 'ten_khoan:so_tien,ten_khoan:so_tien'."
+    try:
+        raw_items = [item.strip() for item in expenses.split(",") if item.strip()]
+        if not raw_items:
+            return "Chuỗi expenses đang trống. Hãy dùng định dạng 'ten_khoan:so_tien,ten_khoan:so_tien'."
 
-    parsed_expenses = []
-    for raw_item in raw_items:
-        if ":" not in raw_item:
-            return (
-                f"Khoản chi '{raw_item}' không hợp lệ. "
-                "Mỗi khoản phải theo dạng 'ten_khoan:so_tien'."
-            )
+        parsed_expenses = []
+        for raw_item in raw_items:
+            if ":" not in raw_item:
+                return (
+                    f"Khoản chi '{raw_item}' không hợp lệ. "
+                    "Mỗi khoản phải theo dạng 'ten_khoan:so_tien'."
+                )
 
-        name, amount_text = raw_item.split(":", 1)
-        name = name.strip()
-        amount_text = amount_text.strip().replace(".", "").replace("_", "")
+            name, amount_text = raw_item.split(":", 1)
+            name = name.strip()
+            amount_text = amount_text.strip().replace(".", "").replace("_", "")
 
-        if not name:
-            return "Tên khoản chi không được để trống."
-        if not amount_text.isdigit():
-            return (
-                f"Số tiền của khoản '{name}' không hợp lệ: '{amount_text}'. "
-                "Hãy nhập số nguyên VNĐ."
-            )
+            if not name:
+                return "Tên khoản chi không được để trống."
+            if not amount_text.isdigit():
+                return (
+                    f"Số tiền của khoản '{name}' không hợp lệ: '{amount_text}'. "
+                    "Hãy nhập số nguyên VNĐ."
+                )
 
-        amount = int(amount_text)
-        parsed_expenses.append((name, amount))
+            amount = int(amount_text)
+            parsed_expenses.append((name, amount))
 
-    total_expense = sum(amount for _, amount in parsed_expenses)
-    remaining = total_budget - total_expense
+        total_expense = sum(amount for _, amount in parsed_expenses)
+        remaining = total_budget - total_expense
 
-    lines = ["Bảng chi phí:"]
-    for name, amount in parsed_expenses:
-        display_name = name.replace("_", " ").strip().capitalize()
-        lines.append(f"- {display_name}: {_format_vnd(amount)}")
+        lines = ["Bảng chi phí:"]
+        for name, amount in parsed_expenses:
+            display_name = name.replace("_", " ").strip().capitalize()
+            lines.append(f"- {display_name}: {_format_vnd(amount)}")
 
-    lines.extend(
-        [
-            "---",
-            f"Tổng chi: {_format_vnd(total_expense)}",
-            f"Ngân sách: {_format_vnd(total_budget)}",
-            f"Còn lại: {_format_vnd(remaining)}",
-        ]
-    )
-
-    if remaining < 0:
-        lines.append(f"Vượt ngân sách {_format_vnd(abs(remaining))}! Cần điều chỉnh.")
-    else:
         lines.extend(
             [
-                (
-                    "Gợi ý bước tiếp theo: dùng số tiền còn lại làm "
-                    "max_price_per_night khi gọi search_hotels."
-                ),
-                f"Ví dụ: search_hotels(city='Đà Nẵng', max_price_per_night={remaining})",
+                "---",
+                f"Tổng chi: {_format_vnd(total_expense)}",
+                f"Ngân sách: {_format_vnd(total_budget)}",
+                f"Còn lại: {_format_vnd(remaining)}",
             ]
         )
 
-    return "\n".join(lines)
+        if remaining < 0:
+            lines.append(f"Vượt ngân sách {_format_vnd(abs(remaining))}! Cần điều chỉnh.")
+        return "\n".join(lines)
+    except Exception as exc:
+        logger.exception("calculate_budget failed")
+        return f"Có lỗi khi tính ngân sách: {exc}"

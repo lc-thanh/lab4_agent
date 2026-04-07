@@ -1,4 +1,7 @@
 import os
+import logging
+import sys
+import time
 from pathlib import Path
 from typing import Annotated
 
@@ -10,10 +13,19 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 from typing_extensions import TypedDict
 
+from logging_utils import configure_logging, log_lines
 from tools import calculate_budget, search_flights, search_hotels
 
 
 load_dotenv()
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
+
+configure_logging()
+logger = logging.getLogger(__name__)
 
 
 # 1. Doc System Prompt
@@ -31,24 +43,37 @@ llm = ChatOpenAI(
     model="qwen/qwen3.6-plus:free",
     api_key=os.getenv("OPENROUTER_API_KEY"),
     base_url="https://openrouter.ai/api/v1",
+    temperature=0,
 )
 llm_with_tools = llm.bind_tools(tools_list)
 
 
+def invoke_with_retry(messages: list, max_attempts: int = 3):
+    last_error: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return llm_with_tools.invoke(messages)
+        except Exception as exc:
+            last_error = exc
+            logger.warning("LLM call failed (attempt %s/%s): %s", attempt, max_attempts, exc)
+            if attempt < max_attempts:
+                time.sleep(attempt)
+    raise last_error
+
+
 # 4. Agent Node
-def agent_node(state: AgentState):
+def agent_node(state: AgentState) -> AgentState:
     messages = state["messages"]
     if not messages or not isinstance(messages[0], SystemMessage):
         messages = [SystemMessage(content=SYSTEM_PROMPT)] + messages
 
-    response = llm_with_tools.invoke(messages)
+    response = invoke_with_retry(messages)
 
-    # === LOGGING ===
     if response.tool_calls:
         for tc in response.tool_calls:
-            print(f"Goi tool: {tc['name']}({tc['args']})")
+            logger.info("Gọi tool: %s(%s)", tc["name"], tc["args"])
     else:
-        print("Tra loi truc tiep")
+        logger.info("Trả lời trực tiếp")
 
     return {"messages": [response]}
 
@@ -69,17 +94,17 @@ graph = builder.compile()
 
 # 6. Chat loop
 if __name__ == "__main__":
-    print("=" * 60)
-    print("TravelBuddy - Tro ly Du lich Thong minh")
-    print("Go 'quit' de thoat")
-    print("=" * 60)
+    log_lines(logger, logging.INFO, "=" * 60)
+    log_lines(logger, logging.INFO, "TravelBuddy - Trợ lý Du lịch Thông minh")
+    log_lines(logger, logging.INFO, "Gõ 'quit' để thoát.")
+    log_lines(logger, logging.INFO, "=" * 60)
 
     while True:
-        user_input = input("\nBan: ").strip()
+        user_input = input("\nBạn: ").strip()
         if user_input.lower() in ("quit", "exit", "q"):
             break
 
-        print("\nTravelBuddy dang suy nghi...")
+        log_lines(logger, logging.INFO, "TravelBuddy đang suy nghĩ...")
         result = graph.invoke({"messages": [("human", user_input)]})
         final = result["messages"][-1]
-        print(f"\nTravelBuddy: {final.content}")
+        log_lines(logger, logging.INFO, f"TravelBuddy: {final.content}")
